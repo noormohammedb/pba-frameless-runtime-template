@@ -382,7 +382,14 @@ impl Runtime {
 	/// In our template, we call into this from both block authoring, and block import.
 	pub(crate) fn do_apply_extrinsic(ext: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
 		let dispatch_outcome = match ext.clone().function {
-			_ => Ok(()),
+			Call::SetValue { value } => {
+				sp_io::storage::set(&VALUE_KEY, &value.encode());
+				Ok(())
+			},
+			Call::UpgradeCode { code } => {
+				sp_io::storage::set(b":code", &code);
+				Ok(())
+			},
 		};
 
 		log::debug!(target: LOG_TARGET, "dispatched {:?}, outcome = {:?}", ext, dispatch_outcome);
@@ -433,7 +440,7 @@ impl Runtime {
 
 	pub(crate) fn do_get_preset(id: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
 		match id {
-			Some(preset_id) =>
+			Some(preset_id) => {
 				if preset_id.as_ref() == "special-preset-1".as_bytes() {
 					Some(
 						serde_json::to_string(&RuntimeGenesis { value: 42 * 2 })
@@ -443,7 +450,8 @@ impl Runtime {
 					)
 				} else {
 					None
-				},
+				}
+			},
 			// none indicates the default preset.
 			None => Some(
 				serde_json::to_string(&RuntimeGenesis { value: 42 })
