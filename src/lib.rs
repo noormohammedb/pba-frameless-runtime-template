@@ -197,7 +197,7 @@ use sp_core::{hexdisplay::HexDisplay, OpaqueMetadata, H256};
 use sp_runtime::{
 	create_runtime_str, generic,
 	traits::{BlakeTwo256, Block as BlockT, Hash},
-	transaction_validity::{TransactionSource, TransactionValidity, ValidTransactionBuilder},
+	transaction_validity::{self, TransactionSource, TransactionValidity, ValidTransactionBuilder},
 	ApplyExtrinsicResult, ExtrinsicInclusionMode,
 };
 use sp_version::RuntimeVersion;
@@ -219,12 +219,16 @@ const EXTRINSICS_KEY: &[u8] = b"extrinsics";
 /// The block number type. You should not change this.
 type BlockNumber = u32;
 
+/// Balance type. We use `u32` for simplicity.
+type Balance = u32;
+
 /// Signature type. We use `sr25519` crypto. You should not change this.
 type Signature = sp_core::sr25519::Signature;
 /// Account id type is the public key. We use `sr25519` crypto.
 ///
 /// be aware of using the right crypto type when using `sp_keyring` and similar crates.
 type AccountId = sp_core::sr25519::Public;
+type MyAccountId = Vec<u8>;
 
 #[derive(
 	Debug, Encode, Decode, TypeInfo, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize,
@@ -232,6 +236,7 @@ type AccountId = sp_core::sr25519::Public;
 enum Call {
 	SetValue { value: u32 },
 	UpgradeCode { code: Vec<u8> },
+	TransferTo { from: MyAccountId, to: MyAccountId, amount: Balance },
 }
 
 #[derive(TypeInfo, Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -342,6 +347,36 @@ impl Runtime {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct RuntimeGenesis {
 	pub(crate) value: u32,
+	pub(crate) alice_balance: u32,
+	// MyAccountId
+	// pub(crate) balance: HashMap<MyAccountId, Balance>,
+	// pub(crate) bob_balance: u32,
+}
+
+// custom logic
+impl Runtime {
+	fn do_transfer(from: MyAccountId, to: MyAccountId, amount: Balance) -> ApplyExtrinsicResult {
+		let current_from_balance = Self::get_state::<Balance>(&from).unwrap_or_default();
+
+		// validate the from have enough balance
+		if current_from_balance < amount {
+			return Err(transaction_validity::TransactionValidityError::Invalid(
+				transaction_validity::InvalidTransaction::Payment,
+			));
+		}
+
+		let current_to_balance = Self::get_state::<Balance>(&to).unwrap_or_default();
+
+		let updated_from_balance = current_from_balance - amount;
+		let updated_to_balance = current_to_balance + amount;
+
+		sp_io::storage::set(&from, &updated_from_balance.encode());
+		sp_io::storage::set(&to, &updated_to_balance.encode());
+
+		// TODO
+
+		Ok(Ok(()))
+	}
 }
 
 // This impl block contains the core runtime api implementations. It contains good starting points
@@ -390,6 +425,10 @@ impl Runtime {
 				sp_io::storage::set(b":code", &code);
 				Ok(())
 			},
+			Call::TransferTo { from, to, amount } => {
+				Self::do_transfer(from, to, amount)?
+				// Ok(())
+			},
 		};
 
 		log::debug!(target: LOG_TARGET, "dispatched {:?}, outcome = {:?}", ext, dispatch_outcome);
@@ -435,6 +474,7 @@ impl Runtime {
 
 	pub(crate) fn do_build_state(runtime_genesis: RuntimeGenesis) -> sp_genesis_builder::Result {
 		sp_io::storage::set(&VALUE_KEY, &runtime_genesis.value.encode());
+		sp_io::storage::set(b"alice_balance", &runtime_genesis.alice_balance.encode());
 		Ok(())
 	}
 
@@ -442,11 +482,17 @@ impl Runtime {
 		match id {
 			Some(preset_id) => {
 				if preset_id.as_ref() == "special-preset-1".as_bytes() {
+					// let mut balance = HashMap::new();
+					// balance.insert(MyAccountId::from_raw([0, 1, 2, 3]), 100);
 					Some(
-						serde_json::to_string(&RuntimeGenesis { value: 42 * 2 })
-							.unwrap()
-							.as_bytes()
-							.to_vec(),
+						serde_json::to_string(&RuntimeGenesis {
+							value: 42 * 2,
+							alice_balance: 100,
+							// balance,
+						})
+						.unwrap()
+						.as_bytes()
+						.to_vec(),
 					)
 				} else {
 					None
@@ -454,7 +500,7 @@ impl Runtime {
 			},
 			// none indicates the default preset.
 			None => Some(
-				serde_json::to_string(&RuntimeGenesis { value: 42 })
+				serde_json::to_string(&RuntimeGenesis { value: 42, alice_balance: 200 })
 					.unwrap()
 					.as_bytes()
 					.to_vec(),
